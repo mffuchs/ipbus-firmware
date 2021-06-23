@@ -25,55 +25,65 @@
 #-------------------------------------------------------------------------------
 
 
+function print_log_on_error {
+  set +x
+  echo " ----------------------------------------------------"
+  echo " ----------------------------------------------------"
+  echo "ERROR occurred. Printing simulation output before bailing"
+  cat ${SIM_LOGFILE}
+}
+
+function wait_for_licence {
+  i=0
+  while [ ! -f ${HAVE_LICENCE_FILE} ]; do 
+    ((i=i+1))
+    m=$(($i%6))
+    if [[ "$m" -eq "0" ]]; then
+      echo "Waiting for license to be acquired (${HAVE_LICENCE_FILE}) [$i]"
+    fi
+    sleep 10; 
+  done
+}
 
 
 SH_SOURCE=${BASH_SOURCE}
 IPBUS_PATH=$(cd $(dirname ${SH_SOURCE})/../.. && pwd)
 WORK_ROOT=$(cd ${IPBUS_PATH}/../.. && pwd)
 
-PROJECTS=(sim)
+SIM_LOGFILE=sim_output.txt
 
-if (( $# != 1 )); then
-  echo "No project specified."
-  echo "Available projects:" $(printf "'%s' " "${PROJECTS[@]}")
-
-  exit -1
-fi
-PROJ=$1
-if [[ ! " ${PROJECTS[@]} " =~ " ${PROJ} " ]]; then
-  # whatever you want to do when arr doesn't contain value
-  echo "Project ${PROJ} not known."
-  echo "Available projects: ${PROJECTS[@]}"
-  exit -1
-fi
-
-# Stop on the first error
-set -e
-# set -x
-
+PROJ=sim_eth
 cd ${WORK_ROOT}
 rm -rf proj/${PROJ}
 echo "#------------------------------------------------"
 echo "Building Project ${PROJ}"
 echo "#------------------------------------------------"
-if [[ "$PROJ" == "sim" ]]; then
-  ipbb proj create sim -t top_sim_eth.dep sim ipbus-firmware:projects/example 
-  ipbb sim -p ${PROJ} setup-simlib
-  ipbb sim -p ${PROJ} ipcores
-  ipbb sim -p ${PROJ} fli
-  ipbb sim -p ${PROJ} make-project
-  cd proj/sim
-  set -x
-  ./vsim -c work.top -gIP_ADDR='X"c0a8c902"' -do 'run 60sec' -do 'quit' > /dev/null 2>&1 &
-  VSIM_PID=$!
-  VSIM_PGRP=$(ps -p ${VSIM_PID} -o pgrp=)
-  # ait for the simulation to start
-  sleep 10
-  # tickle the simulation
-  ping 192.168.201.2 -c 5
-  # Cleanup, send SIGINT to the vsimk process in the current process group
-  pkill -SIGINT -g ${VSIM_PGRP} vsimk
-  set +x
-fi
+
+ipbb proj create sim ${PROJ} ipbus-firmware:projects/example top_sim_eth.dep
+cd proj/${PROJ}
+ipbb sim setup-simlib
+ipbb sim ipcores
+ipbb sim fli-eth
+ipbb sim generate-project
+
+set -x
+HAVE_LICENCE_FILE="i_got_a_licence.txt"
+./run_sim -c work.top -gIP_ADDR='X"c0a8c902"' -do "exec touch ${HAVE_LICENCE_FILE}" -do 'run 60sec' -do 'quit' > ${SIM_LOGFILE} 2>&1 &
+VSIM_PID=$!
+VSIM_PGRP=$(ps -p ${VSIM_PID} -o pgrp=)
+trap print_log_on_error EXIT
+
+# Wait for a licence to be available
+set +x
+wait_for_licence
+set -x
+# ait for the simulation to start
+sleep 10
+# tickle the simulation
+ping 192.168.201.2 -c 5
+# Cleanup, send SIGINT to the vsimk process in the current process group
+pkill -SIGINT -g ${VSIM_PGRP} vsimk
+set +x
+# fi
 
 exit 0

@@ -25,32 +25,58 @@
 #-------------------------------------------------------------------------------
 
 
+function print_log_on_error {
+  set +x
+  echo " ----------------------------------------------------"
+  echo " ----------------------------------------------------"
+  echo "ERROR occurred. Printing simulation output before bailing"
+  cat ${SIM_LOGFILE}
+}
+
+function wait_for_licence {
+  i=0
+  while [ ! -f ${HAVE_LICENCE_FILE} ]; do 
+    ((i=i+1))
+    m=$(($i%6))
+    if [[ "$m" -eq "0" ]]; then
+      echo "Waiting for license to be acquired (${HAVE_LICENCE_FILE}) [$i]"
+    fi
+    sleep 10; 
+  done
+}
+
+
 SH_SOURCE=${BASH_SOURCE}
 IPBUS_PATH=$(cd $(dirname ${SH_SOURCE})/../.. && pwd)
 WORK_ROOT=$(cd ${IPBUS_PATH}/../.. && pwd)
+
+SIM_LOGFILE=sim_output.txt
+
 PROJ=sim_ctr_slaves
-
-# Stop on the first error
-set -e
-# set -x
-
 cd ${WORK_ROOT}
 rm -rf proj/${PROJ}
+echo "#------------------------------------------------"
+echo "Building Project ${PROJ}"
+echo "#------------------------------------------------"
 
-ipbb proj create sim -t top_sim.dep ${PROJ} ipbus-firmware:tests/ctr_slaves 
-cd proj/sim_ctr_slaves
-
+ipbb proj create sim ${PROJ} ipbus-firmware:tests/ctr_slaves top_sim.dep
+cd proj/${PROJ}
 ipbb sim setup-simlib
 ipbb sim ipcores
 ipbb sim fli-udp
-ipbb sim make-project
-ipbb sim addrtab
+ipbb sim generate-project
 
 set -x
-./vsim -c work.top -do 'run 60sec' -do 'quit' > /dev/null 2>&1 &
+HAVE_LICENCE_FILE="i_got_a_licence.txt"
+./run_sim -c work.top -gIP_ADDR='X"c0a8c902"' -do "exec touch ${HAVE_LICENCE_FILE}" -do 'run 60sec' -do 'quit' > ${SIM_LOGFILE} 2>&1 &
 VSIM_PID=$!
 VSIM_PGRP=$(ps -p ${VSIM_PID} -o pgrp=)
+trap print_log_on_error EXIT
 
+# Wait for a licence to be available
+set +x
+wait_for_licence
+set -x
 # wait for the simulation to start
 sleep 10
 
